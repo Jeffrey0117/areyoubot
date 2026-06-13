@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>areyoubot widget demo</title>
+    <style>
+      body {
+        font-family: system-ui, -apple-system, Segoe UI, sans-serif;
+        max-width: 28rem;
+        margin: 4rem auto;
+        padding: 0 1rem;
+        color: #1f2937;
+      }
+      form {
+        display: grid;
+        gap: 0.75rem;
+      }
+      input[type='email'] {
+        padding: 0.5rem 0.75rem;
+        border: 1px solid #d1d5db;
+        border-radius: 6px;
+        font-size: 1rem;
+      }
+      button {
+        padding: 0.5rem 0.75rem;
+        border: 0;
+        border-radius: 6px;
+        background: #2563eb;
+        color: #fff;
+        font-size: 1rem;
+        cursor: pointer;
+      }
+      pre {
+        background: #f3f4f6;
+        padding: 0.75rem;
+        border-radius: 6px;
+        white-space: pre-wrap;
+        word-break: break-all;
+        font-size: 0.8rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>are you bot? 😏</h1>
+    <p>Submit the form — the widget solves a PoW challenge and attaches the token.</p>
+
+    <form id="demo-form">
+      <input type="email" name="email" placeholder="you@example.com" required />
+      <button type="submit">Sign up</button>
+      <script src="/widget.js" data-ayb-sitekey="ayb_demo"></script>
+    </form>
+
+    <h2>Submitted token</h2>
+    <pre id="out">(submit to see the areyoubot-token)</pre>
+
+    <script>
+      document.getElementById('demo-form').addEventListener('submit', function (ev) {
+        ev.preventDefault()
+        var field = this.querySelector('input[name="areyoubot-token"]')
+        document.getElementById('out').textContent = field
+          ? field.value
+          : '(token not ready yet — wait for ✓ verified and submit again)'
+      })
+    </script>
+  </body>
+</html>
