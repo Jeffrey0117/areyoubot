@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 4032",
+    "dev": "next dev -p 4033",
     "build:widget": "esbuild src/widget/index.ts --bundle --minify --format=iife --outfile=public/widget.js",
     "build": "pnpm build:widget && next build",
-    "start": "next start -p 4032",
+    "start": "next start -p 4033",
     "test": "vitest run",
     "test:watch": "vitest"
   },
