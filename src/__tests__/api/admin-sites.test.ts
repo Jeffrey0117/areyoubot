@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { createHmac } from 'node:crypto'
 
 vi.mock('@/lib/selfize', () => ({
   sfCreateCollection: vi.fn().mockResolvedValue(undefined),
@@ -12,10 +13,14 @@ import { sfCreate, sfList } from '@/lib/selfize'
 import { POST, GET } from '@/app/api/admin/sites/route'
 
 const OLD_ENV = { ...process.env }
+const APP_SECRET = 'areyoubot-app-secret-under-test'
 
+// Properly HS256-signed token (signature verified by verifyLetmeuseToken now).
 function makeToken(payload: Record<string, unknown>): string {
   const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url')
-  return `${b64({ alg: 'HS256' })}.${b64(payload)}.sig`
+  const signingInput = `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64(payload)}`
+  const sig = createHmac('sha256', APP_SECRET).update(signingInput).digest('base64url')
+  return `${signingInput}.${sig}`
 }
 const future = Math.floor(Date.now() / 1000) + 3600
 const adminToken = makeToken({ sub: 'u', email: 'admin@x.com', role: 'user', exp: future })
@@ -41,6 +46,7 @@ beforeEach(() => {
   process.env.SELFIZE_URL = 'https://selfize.example.com'
   process.env.SELFIZE_TOKEN = 'tok'
   process.env.AREYOUBOT_ADMIN_EMAIL = 'admin@x.com'
+  process.env.LETMEUSE_APP_SECRET = APP_SECRET
 })
 afterEach(() => {
   process.env = { ...OLD_ENV }
