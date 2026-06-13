@@ -6,6 +6,14 @@ import { siteStore } from '@/lib/sites-instance'
 import { replayStore } from '@/lib/replay'
 import { getHmacSecret } from '@/lib/config'
 
+// HTTP status 政策（刻意分層，呼叫端可依此判斷）：
+//   - 請求格式錯誤（invalid json / 缺欄位）→ 400
+//   - 認證失敗（secret 不對應任何 site）→ 401
+//   - 驗證業務結果（challenge 過期 / sitekey 不符 / PoW 失敗 / 重放）→ 200 + success:false
+//     （比照 reCAPTCHA/Turnstile：驗證「沒通過」不是 HTTP 錯誤，看 body.success）
+//
+// 註：本路由是 server-to-server（宿主後端帶 secret 呼叫），刻意「不開 CORS」，
+// 不該、也不能被瀏覽器跨域呼叫。
 function fail(error: string, status = 200): NextResponse {
   return NextResponse.json({ success: false, error }, { status })
 }

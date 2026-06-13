@@ -9,6 +9,8 @@ export function getHmacSecret(): string {
 }
 
 export function clampDifficulty(d: number): number {
-  if (!Number.isFinite(d)) return DEFAULT_DIFFICULTY
-  return Math.max(1, Math.min(MAX_DIFFICULTY, Math.floor(d)))
+  // 非法或過低（含 0、負數、NaN）一律回預設難度，避免「site 設定錯誤 →
+  // 難度被靜默抬成 1 → CAPTCHA 幾乎等於關閉」。合法值上限 clamp 到 MAX。
+  if (!Number.isFinite(d) || d < 1) return DEFAULT_DIFFICULTY
+  return Math.min(MAX_DIFFICULTY, Math.floor(d))
 }
