@@ -5,13 +5,14 @@ import type { Site } from '@/lib/sites'
 // Mock the selfize client so the store is tested in isolation.
 vi.mock('@/lib/selfize', () => ({
   sfCreateCollection: vi.fn().mockResolvedValue(undefined),
+  sfCollectionExists: vi.fn().mockResolvedValue(false),
   sfFindOne: vi.fn(),
   sfList: vi.fn(),
   sfCreate: vi.fn(),
   sfDelete: vi.fn(),
 }))
 
-import { sfCreateCollection, sfFindOne } from '@/lib/selfize'
+import { sfCreateCollection, sfCollectionExists, sfFindOne } from '@/lib/selfize'
 
 const record = (over: Partial<Site> = {}) => ({
   id: 'uuid-1',
@@ -24,6 +25,8 @@ const record = (over: Partial<Site> = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  ;(sfCollectionExists as ReturnType<typeof vi.fn>).mockResolvedValue(false)
+  ;(sfCreateCollection as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
 })
 
 afterEach(() => {
@@ -31,7 +34,8 @@ afterEach(() => {
 })
 
 describe('SelfizeSiteStore', () => {
-  it('ensureReady creates the collection with admin-only rules', async () => {
+  it('ensureReady creates the collection with admin-only rules when it does not exist', async () => {
+    ;(sfCollectionExists as ReturnType<typeof vi.fn>).mockResolvedValue(false)
     const store = new SelfizeSiteStore()
     await store.ensureReady()
     expect(sfCreateCollection).toHaveBeenCalledTimes(1)
@@ -40,6 +44,30 @@ describe('SelfizeSiteStore', () => {
     expect(arg.rules).toEqual({ read: 'admin', create: 'admin', update: 'admin', delete: 'admin' })
     const fieldNames = arg.schema.map((f: { name: string }) => f.name)
     expect(fieldNames).toEqual(expect.arrayContaining(['sitekey', 'secret', 'difficulty', 'disabled']))
+  })
+
+  it('ensureReady skips create when the collection already exists', async () => {
+    ;(sfCollectionExists as ReturnType<typeof vi.fn>).mockResolvedValue(true)
+    const store = new SelfizeSiteStore()
+    await store.ensureReady()
+    expect(sfCreateCollection).not.toHaveBeenCalled()
+  })
+
+  it('ensureReady does NOT throw if create reports already-exists (sfCreateCollection swallows it)', async () => {
+    // even if the existence check missed, create swallows already-exists, so
+    // ensureReady must resolve cleanly (this is the prod 500 already-exists bug).
+    ;(sfCollectionExists as ReturnType<typeof vi.fn>).mockResolvedValue(false)
+    ;(sfCreateCollection as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
+    const store = new SelfizeSiteStore()
+    await expect(store.ensureReady()).resolves.toBeUndefined()
+  })
+
+  it('ensureReady is memoised: a second call does not re-check / re-create', async () => {
+    const store = new SelfizeSiteStore()
+    await store.ensureReady()
+    await store.ensureReady()
+    expect(sfCollectionExists).toHaveBeenCalledTimes(1)
+    expect(sfCreateCollection).toHaveBeenCalledTimes(1)
   })
 
   it('getBySitekey returns a normalised Site', async () => {

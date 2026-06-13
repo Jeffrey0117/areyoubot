@@ -2,19 +2,22 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 vi.mock('@/lib/selfize', () => ({
   sfCreateCollection: vi.fn().mockResolvedValue(undefined),
+  sfCollectionExists: vi.fn().mockResolvedValue(false),
   sfFindOne: vi.fn(),
   sfCreate: vi.fn(),
   sfList: vi.fn(),
   sfDelete: vi.fn(),
 }))
 
-import { sfFindOne, sfCreate, sfCreateCollection } from '@/lib/selfize'
+import { sfFindOne, sfCreate, sfCreateCollection, sfCollectionExists } from '@/lib/selfize'
 
 const OLD_ENV = { ...process.env }
 
 beforeEach(() => {
   vi.clearAllMocks()
   vi.resetModules()
+  ;(sfCollectionExists as ReturnType<typeof vi.fn>).mockResolvedValue(false)
+  ;(sfCreateCollection as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
 })
 
 afterEach(() => {
@@ -58,7 +61,7 @@ describe('sites-instance', () => {
       ;(sfFindOne as ReturnType<typeof vi.fn>).mockResolvedValue(null)
       const mod = await import('@/lib/sites-instance')
       await mod.seedDemoSite()
-      expect(sfCreateCollection).toHaveBeenCalled() // ensureReady ran
+      expect(sfCollectionExists).toHaveBeenCalled() // ensureReady ran
       expect(sfCreate).toHaveBeenCalledTimes(1)
       const arg = (sfCreate as ReturnType<typeof vi.fn>).mock.calls[0]
       expect(arg[0]).toBe('areyoubot_sites')

@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { sfCreateCollection, sfList, sfCreate, sfFindOne, sfDelete } from '@/lib/selfize'
+import {
+  sfCreateCollection,
+  sfCollectionExists,
+  sfList,
+  sfCreate,
+  sfFindOne,
+  sfDelete,
+} from '@/lib/selfize'
 
 const OLD_ENV = { ...process.env }
 
@@ -125,5 +132,60 @@ describe('selfize client', () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ error: 'boom' }, 500))
     vi.stubGlobal('fetch', fetchMock)
     await expect(sfList('c')).rejects.toThrow()
+  })
+
+  describe('sfCreateCollection idempotency', () => {
+    it('resolves (does not throw) on 409 already-exists', async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(jsonResponse({ error: 'Collection "x" already exists' }, 409))
+      vi.stubGlobal('fetch', fetchMock)
+      await expect(
+        sfCreateCollection({ name: 'x', schema: [], rules: { read: 'admin', create: 'admin', update: 'admin', delete: 'admin' } })
+      ).resolves.toBeUndefined()
+    })
+
+    it('resolves on 500 whose body says "already exists" (selfize real behaviour)', async () => {
+      // selfize returns 500, NOT 409, for an existing collection.
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(jsonResponse({ error: 'Collection "areyoubot_sites" already exists' }, 500))
+      vi.stubGlobal('fetch', fetchMock)
+      await expect(
+        sfCreateCollection({ name: 'areyoubot_sites', schema: [], rules: { read: 'admin', create: 'admin', update: 'admin', delete: 'admin' } })
+      ).resolves.toBeUndefined()
+    })
+
+    it('still throws on a genuine 500 that is not an already-exists error', async () => {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ error: 'internal boom' }, 500))
+      vi.stubGlobal('fetch', fetchMock)
+      await expect(
+        sfCreateCollection({ name: 'x', schema: [], rules: { read: 'admin', create: 'admin', update: 'admin', delete: 'admin' } })
+      ).rejects.toThrow()
+    })
+  })
+
+  describe('sfCollectionExists', () => {
+    it('returns true on a 2xx GET of the collection', async () => {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ name: 'areyoubot_sites' }, 200))
+      vi.stubGlobal('fetch', fetchMock)
+      const out = await sfCollectionExists('areyoubot_sites')
+      expect(out).toBe(true)
+      const [url, init] = fetchMock.mock.calls[0]
+      expect(url).toBe('https://selfize.example.com/api/collections/areyoubot_sites')
+      expect(init.method).toBe('GET')
+    })
+
+    it('returns false on 404', async () => {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ error: 'not found' }, 404))
+      vi.stubGlobal('fetch', fetchMock)
+      expect(await sfCollectionExists('nope')).toBe(false)
+    })
+
+    it('returns false on other errors (so ensureReady can fall through to create)', async () => {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ error: 'boom' }, 500))
+      vi.stubGlobal('fetch', fetchMock)
+      expect(await sfCollectionExists('x')).toBe(false)
+    })
   })
 })

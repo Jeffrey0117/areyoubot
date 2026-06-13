@@ -3,6 +3,7 @@ import { createHmac } from 'node:crypto'
 
 vi.mock('@/lib/selfize', () => ({
   sfCreateCollection: vi.fn().mockResolvedValue(undefined),
+  sfCollectionExists: vi.fn().mockResolvedValue(true),
   sfFindOne: vi.fn(),
   sfCreate: vi.fn(),
   sfList: vi.fn(),

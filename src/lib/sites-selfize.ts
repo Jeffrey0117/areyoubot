@@ -1,6 +1,7 @@
 import type { Site, SiteStore } from '@/lib/sites'
 import {
   sfCreateCollection,
+  sfCollectionExists,
   sfFindOne,
   type SelfizeRecord,
   type SelfizeRules,
@@ -48,27 +49,34 @@ export class SelfizeSiteStore implements SiteStore {
     this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS
   }
 
-  // Idempotent — sfCreateCollection swallows 409/already-exists. Memoised so
-  // concurrent boot callers share one round-trip.
+  // Idempotent + memoised. Check existence first (selfize returns 500 — NOT 409
+  // — for a duplicate collection, so we must not blindly re-create on every
+  // request). If it already exists, skip create entirely; otherwise create,
+  // where sfCreateCollection still swallows already-exists as a race safeguard.
   ensureReady(): Promise<void> {
     if (!this.ready) {
-      this.ready = sfCreateCollection({
-        name: AREYOUBOT_SITES_COLLECTION,
-        schema: [
-          { name: 'sitekey', type: 'text', required: true },
-          { name: 'secret', type: 'text', required: true },
-          { name: 'difficulty', type: 'integer' },
-          { name: 'disabled', type: 'boolean' },
-          { name: 'label', type: 'text' },
-        ],
-        rules: ADMIN_ONLY,
-      }).catch((err) => {
+      this.ready = this.doEnsure().catch((err) => {
         // Let a later call retry rather than caching a permanent failure.
         this.ready = null
         throw err
       })
     }
     return this.ready
+  }
+
+  private async doEnsure(): Promise<void> {
+    if (await sfCollectionExists(AREYOUBOT_SITES_COLLECTION)) return
+    await sfCreateCollection({
+      name: AREYOUBOT_SITES_COLLECTION,
+      schema: [
+        { name: 'sitekey', type: 'text', required: true },
+        { name: 'secret', type: 'text', required: true },
+        { name: 'difficulty', type: 'integer' },
+        { name: 'disabled', type: 'boolean' },
+        { name: 'label', type: 'text' },
+      ],
+      rules: ADMIN_ONLY,
+    })
   }
 
   async getBySitekey(sitekey: string): Promise<Site | null> {

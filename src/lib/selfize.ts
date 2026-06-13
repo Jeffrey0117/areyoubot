@@ -50,8 +50,11 @@ interface SelfizeFetchOptions {
   readonly method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'
   readonly body?: unknown
   // When set, these HTTP statuses are treated as success and parsed (or null).
-  // Used by ensureReady() to swallow "collection already exists" (409).
   readonly okStatuses?: readonly number[]
+  // When set, a non-ok response whose body text matches this predicate is
+  // treated as success (used to swallow "already exists" regardless of status —
+  // selfize returns 500, NOT 409, for a duplicate collection).
+  readonly okBodyMatch?: (bodyText: string) => boolean
 }
 
 export async function selfizeFetch<T = unknown>(
@@ -59,7 +62,7 @@ export async function selfizeFetch<T = unknown>(
   options: SelfizeFetchOptions = {}
 ): Promise<T> {
   const { baseUrl, token } = getConfig()
-  const { method = 'GET', body, okStatuses } = options
+  const { method = 'GET', body, okStatuses, okBodyMatch } = options
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
     'Content-Type': 'application/json',
@@ -71,10 +74,15 @@ export async function selfizeFetch<T = unknown>(
   })
   if (!res.ok && !(okStatuses ?? []).includes(res.status)) {
     const text = await res.text().catch(() => '')
+    if (okBodyMatch && okBodyMatch(text)) return null as T
     throw new Error(`selfize ${method} ${path} failed: ${res.status} ${text}`)
   }
   if (res.status === 204) return null as T
   return (await res.json().catch(() => null)) as T
+}
+
+function isAlreadyExists(bodyText: string): boolean {
+  return /already exists/i.test(bodyText)
 }
 
 export async function sfCreateCollection(input: {
@@ -85,9 +93,26 @@ export async function sfCreateCollection(input: {
   await selfizeFetch('/api/collections', {
     method: 'POST',
     body: { name: input.name, schema: input.schema, rules: input.rules },
-    // 409 / already-exists is fine for idempotent ensureReady.
+    // Idempotent create: selfize returns 409 OR (in prod) 500 with an
+    // "already exists" body. Swallow both — anything else still throws.
     okStatuses: [409],
+    okBodyMatch: isAlreadyExists,
   })
+}
+
+// Existence preflight so ensureReady can skip the create call entirely. Returns
+// false (not throw) on any error so the caller can fall through to create.
+export async function sfCollectionExists(name: string): Promise<boolean> {
+  try {
+    const { baseUrl, token } = getConfig()
+    const res = await fetch(`${baseUrl}/api/collections/${name}`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    })
+    return res.ok
+  } catch {
+    return false
+  }
 }
 
 export async function sfCreate(collection: string, record: Record<string, unknown>): Promise<SelfizeRecord> {
