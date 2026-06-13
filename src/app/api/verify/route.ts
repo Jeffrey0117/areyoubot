@@ -5,6 +5,7 @@ import { meetsPow } from '@/lib/pow'
 import { siteStore } from '@/lib/sites-instance'
 import { replayStore } from '@/lib/replay'
 import { getHmacSecret } from '@/lib/config'
+import { recordVerify } from '@/lib/stats'
 
 // HTTP status 政策（刻意分層，呼叫端可依此判斷）：
 //   - 請求格式錯誤（invalid json / 缺欄位）→ 400
@@ -37,15 +38,31 @@ export async function POST(request: Request): Promise<NextResponse> {
   const site = await siteStore.getBySecret(secret)
   if (!site || site.disabled) return fail('invalid secret', 401)
 
+  // The secret is valid, so site.sitekey is the legitimate sitekey to attribute
+  // every verify outcome below to. recordVerify is sync + never throws + does no
+  // I/O, so it cannot change the response or its ordering.
   const payload = verifyChallengeToken(challengeToken, getHmacSecret(), Date.now())
-  if (!payload) return fail('invalid or expired challenge')
-  if (payload.sitekey !== site.sitekey) return fail('sitekey mismatch')
+  if (!payload) {
+    recordVerify(site.sitekey, false)
+    return fail('invalid or expired challenge')
+  }
+  if (payload.sitekey !== site.sitekey) {
+    recordVerify(site.sitekey, false)
+    return fail('sitekey mismatch')
+  }
 
-  if (!meetsPow(challengeToken, solution, payload.difficulty)) return fail('proof of work failed')
+  if (!meetsPow(challengeToken, solution, payload.difficulty)) {
+    recordVerify(site.sitekey, false)
+    return fail('proof of work failed')
+  }
 
   const replayKey = createHash('sha256').update(challengeToken).digest('base64url')
   const fresh = await replayStore.useOnce(replayKey, payload.exp)
-  if (!fresh) return fail('token already used')
+  if (!fresh) {
+    recordVerify(site.sitekey, false)
+    return fail('token already used')
+  }
 
+  recordVerify(site.sitekey, true)
   return NextResponse.json({ success: true, ts: new Date(payload.iat).toISOString() })
 }

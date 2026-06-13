@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto'
 import { signChallenge } from '@/lib/challenge'
 import { siteStore } from '@/lib/sites-instance'
 import { getHmacSecret, CHALLENGE_TTL_MS, clampDifficulty } from '@/lib/config'
+import { recordChallenge } from '@/lib/stats'
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, OPTIONS' }
 
@@ -25,5 +26,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     { sitekey, nonceSeed: randomBytes(12).toString('base64url'), difficulty, iat: now, exp: now + CHALLENGE_TTL_MS },
     getHmacSecret()
   )
+  // fire-and-forget, synchronous, never throws — must not affect the response.
+  recordChallenge(sitekey)
   return NextResponse.json({ token, difficulty, ttl: CHALLENGE_TTL_MS }, { headers: CORS })
 }
