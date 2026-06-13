@@ -5,6 +5,7 @@ import {
   sfList,
   sfCreate,
   sfFindOne,
+  sfUpdate,
   sfDelete,
 } from '@/lib/selfize'
 
@@ -109,6 +110,21 @@ describe('selfize client', () => {
     await sfFindOne('c', 'email', 'a b+c@x.com')
     const [url] = fetchMock.mock.calls[0]
     expect(url).toContain('email=eq.' + encodeURIComponent('a b+c@x.com'))
+  })
+
+  it('sfUpdate PATCHes the record by id and returns it', async () => {
+    const updated = { id: 'uuid-7', challenges: 5 }
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(updated, 200))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const out = await sfUpdate('areyoubot_stats', 'uuid-7', { challenges: 5 })
+
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('https://selfize.example.com/api/collections/areyoubot_stats/records/uuid-7')
+    expect(init.method).toBe('PATCH')
+    expect(init.headers['Authorization']).toBe('Bearer test-token')
+    expect(JSON.parse(init.body)).toEqual({ challenges: 5 })
+    expect(out).toEqual(updated)
   })
 
   it('sfDelete DELETEs the record by id', async () => {

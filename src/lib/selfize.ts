@@ -137,6 +137,17 @@ export async function sfFindOne(
   return out?.items?.[0] ?? null
 }
 
+export async function sfUpdate(
+  collection: string,
+  id: string,
+  patch: Record<string, unknown>
+): Promise<SelfizeRecord> {
+  return selfizeFetch<SelfizeRecord>(
+    `/api/collections/${collection}/records/${encodeURIComponent(id)}`,
+    { method: 'PATCH', body: patch }
+  )
+}
+
 export async function sfDelete(collection: string, id: string): Promise<void> {
   await selfizeFetch(`/api/collections/${collection}/records/${encodeURIComponent(id)}`, {
     method: 'DELETE',
