@@ -45,6 +45,13 @@ interface CreatedSite {
   label: string
 }
 
+interface StatRow {
+  sitekey: string
+  challenges: number
+  verifySuccess: number
+  verifyFail: number
+}
+
 const SDK_SRC = 'https://letmeuse.isnowfriend.com/letmeuse.js'
 
 function useLetmeuse(): { ready: boolean; user: LetmeuseUser | null } {
@@ -95,6 +102,7 @@ export default function AdminPage() {
   const { ready, user } = useLetmeuse()
   const [isAdmin, setIsAdmin] = useState(false)
   const [sites, setSites] = useState<SiteRow[]>([])
+  const [stats, setStats] = useState<StatRow[]>([])
   const [label, setLabel] = useState('')
   const [difficulty, setDifficulty] = useState(18)
   const [created, setCreated] = useState<CreatedSite | null>(null)
@@ -134,9 +142,25 @@ export default function AdminPage() {
     }
   }, [])
 
+  const loadStats = useCallback(async () => {
+    const token = window.letmeuse?.getToken()
+    if (!token) return
+    try {
+      const res = await fetch('/api/admin/stats', { headers: { Authorization: `Bearer ${token}` } })
+      if (!res.ok) return
+      const data = await res.json()
+      setStats(data.sites ?? [])
+    } catch {
+      // non-critical; leave existing stats in place.
+    }
+  }, [])
+
   useEffect(() => {
-    if (isAdmin) void loadSites()
-  }, [isAdmin, loadSites])
+    if (isAdmin) {
+      void loadSites()
+      void loadStats()
+    }
+  }, [isAdmin, loadSites, loadStats])
 
   const createSite = useCallback(async () => {
     const token = window.letmeuse?.getToken()
@@ -267,6 +291,36 @@ export default function AdminPage() {
                 </table>
               )}
             </section>
+
+            <section style={styles.section}>
+              <h2 style={styles.h2}>統計</h2>
+              {stats.length === 0 ? (
+                <p style={styles.muted}>尚無統計資料。</p>
+              ) : (
+                <table style={styles.table}>
+                  <thead>
+                    <tr>
+                      <th style={styles.th}>sitekey</th>
+                      <th style={styles.thNum}>challenge 發放</th>
+                      <th style={styles.thNum}>verify 成功</th>
+                      <th style={styles.thNum}>verify 失敗</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stats.map((s) => (
+                      <tr key={s.sitekey}>
+                        <td style={styles.td}>
+                          <code style={styles.code}>{s.sitekey}</code>
+                        </td>
+                        <td style={styles.tdNum}>{s.challenges}</td>
+                        <td style={styles.tdNum}>{s.verifySuccess}</td>
+                        <td style={styles.tdNum}>{s.verifyFail}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </section>
           </div>
         )}
       </div>
@@ -339,5 +393,12 @@ const styles: Record<string, React.CSSProperties> = {
   error: { color: '#dc2626', fontSize: 14, marginTop: 12 },
   table: { width: '100%', borderCollapse: 'collapse', fontSize: 13 },
   th: { textAlign: 'left', padding: '8px 6px', borderBottom: '2px solid #e2e8f0', color: '#475569' },
+  thNum: { textAlign: 'right', padding: '8px 6px', borderBottom: '2px solid #e2e8f0', color: '#475569' },
   td: { padding: '8px 6px', borderBottom: '1px solid #f1f5f9' },
+  tdNum: {
+    padding: '8px 6px',
+    borderBottom: '1px solid #f1f5f9',
+    textAlign: 'right',
+    fontVariantNumeric: 'tabular-nums',
+  },
 }
