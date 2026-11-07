@@ -21,8 +21,5 @@
     "esbuild": "^0.24",
     "typescript": "^5",
     "vitest": "^2"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
   }
 }

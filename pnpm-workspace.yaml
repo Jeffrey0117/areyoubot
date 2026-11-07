@@ -1,0 +1,10 @@
+# pnpm 11 起，package.json 的 `pnpm.onlyBuiltDependencies` 失效，核准建置腳本
+# 要寫在這裡。沒有這個檔的話 `pnpm install` 會因為「有未核准的 build script」
+# 直接 exit 1（ERR_PNPM_IGNORED_BUILDS），部署就跟著失敗。
+#
+# ⚠️ 這個檔之前被一次失敗的 install 寫進了佔位垃圾（字面 "set this to true or
+# false"）又沒 commit → 部署目錄永遠 dirty → webhook 部署被 dirty-check abort。
+# 所以它必須有真值、而且要進 git。
+allowBuilds:
+  esbuild: true
+  sharp: true

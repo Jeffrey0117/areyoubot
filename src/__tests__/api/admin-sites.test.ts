@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { createHmac } from 'node:crypto'
+
+vi.mock('@/lib/jwks-cache', async () => {
+  const h = await import('../helpers/test-jwks')
+  return {
+    getJwksPublicKey: (kid: string) => (kid === h.TEST_KID ? h.testPublicKey : null),
+    getJwksStats: () => ({ url: 'test', keys: 1, lastSuccessAt: null, lastError: null }),
+  }
+})
 
 vi.mock('@/lib/selfize', () => ({
   sfCreateCollection: vi.fn().mockResolvedValue(undefined),
@@ -11,17 +18,14 @@ vi.mock('@/lib/selfize', () => ({
 }))
 
 import { sfCreate, sfList } from '@/lib/selfize'
+import { makeUserToken, TEST_APP_ID } from '../helpers/test-jwks'
 import { POST, GET } from '@/app/api/admin/sites/route'
 
 const OLD_ENV = { ...process.env }
-const APP_SECRET = 'areyoubot-app-secret-under-test'
-
-// Properly HS256-signed token (signature verified by verifyLetmeuseToken now).
+// Tokens are ES256 now (letmeuse dropped HS256): sign with the shared test
+// key and let the mocked jwks-cache above serve its public half.
 function makeToken(payload: Record<string, unknown>): string {
-  const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url')
-  const signingInput = `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64(payload)}`
-  const sig = createHmac('sha256', APP_SECRET).update(signingInput).digest('base64url')
-  return `${signingInput}.${sig}`
+  return makeUserToken(payload)
 }
 const future = Math.floor(Date.now() / 1000) + 3600
 const adminToken = makeToken({ sub: 'u', email: 'admin@x.com', role: 'user', exp: future })
@@ -47,7 +51,7 @@ beforeEach(() => {
   process.env.SELFIZE_URL = 'https://selfize.example.com'
   process.env.SELFIZE_TOKEN = 'tok'
   process.env.AREYOUBOT_ADMIN_EMAIL = 'admin@x.com'
-  process.env.LETMEUSE_APP_SECRET = APP_SECRET
+  process.env.LETMEUSE_APP_ID = TEST_APP_ID
 })
 afterEach(() => {
   process.env = { ...OLD_ENV }
