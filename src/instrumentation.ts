@@ -6,6 +6,27 @@ const FLUSH_INTERVAL_MS = 30_000
 
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return
+
+  // Warm the JWKS public-key cache at boot.
+  //
+  // Verification is synchronous and fail-closed, so a cold cache rejects the
+  // token it is handed and only fetches the key in the background. Without
+  // this warm-up the FIRST admin request after every restart 401s even with a
+  // perfectly valid token — which reads exactly like "my login is broken".
+  // Awaiting one fetch here costs a few hundred ms of boot and removes the
+  // whole class of problem. Best-effort: if letmeuse is down we still boot,
+  // the cache retries on the next unknown-kid miss, and the reason is visible
+  // in getJwksStats().lastError.
+  try {
+    const { getSharedJwksCache } = await import('@/lib/jwks-cache')
+    const cache = getSharedJwksCache()
+    await cache.refresh()
+    const s = cache.stats()
+    if (s.keys === 0) console.warn(`[boot] JWKS 預熱失敗（admin 登入會全部 401）: ${s.lastError ?? 'no keys'}`)
+  } catch {
+    // never block boot on this
+  }
+
   try {
     const { seedDemoSite } = await import('@/lib/sites-instance')
     await seedDemoSite()
