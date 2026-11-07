@@ -18,7 +18,7 @@ async function ensureCollection(): Promise<void> {
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
-  const gate = gateAdmin(request)
+  const gate = await gateAdmin(request)
   if (!gate.ok) return NextResponse.json({ error: 'unauthorized' }, { status: gate.status })
 
   let body: { label?: unknown; difficulty?: unknown }
@@ -50,7 +50,7 @@ export async function POST(request: Request): Promise<NextResponse> {
 }
 
 export async function GET(request: Request): Promise<NextResponse> {
-  const gate = gateAdmin(request)
+  const gate = await gateAdmin(request)
   if (!gate.ok) return NextResponse.json({ error: 'unauthorized' }, { status: gate.status })
 
   await ensureCollection()

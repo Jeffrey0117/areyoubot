@@ -42,7 +42,7 @@ function recentDates(today: string, days: number): Set<string> {
 }
 
 export async function GET(request: Request): Promise<NextResponse> {
-  const gate = gateAdmin(request)
+  const gate = await gateAdmin(request)
   if (!gate.ok) return NextResponse.json({ error: 'unauthorized' }, { status: gate.status })
 
   const today = new Date().toISOString().slice(0, 10)

@@ -24,7 +24,7 @@
 // Zero external deps — node's built-in crypto only.
 
 import crypto from 'node:crypto'
-import { getJwksPublicKey } from './jwks-cache'
+import { getJwksPublicKeyAsync } from './jwks-cache'
 
 export interface LetmeuseClaims {
   readonly sub: string
@@ -34,8 +34,12 @@ export interface LetmeuseClaims {
 }
 
 export interface VerifyDeps {
-  /** Public-key lookup by `kid`. Injected in tests; defaults to the JWKS cache. */
-  readonly getKey?: (kid: string) => crypto.KeyObject | null
+  /**
+   * Public-key lookup by `kid`. Injected in tests; defaults to the JWKS
+   * cache's async lookup (which waits for one fetch on a miss, so the first
+   * request after a restart is not rejected with a cold cache).
+   */
+  readonly getKey?: (kid: string) => crypto.KeyObject | null | Promise<crypto.KeyObject | null>
   /** Expected `app` claim. Defaults to LETMEUSE_APP_ID. */
   readonly appId?: string
 }
@@ -60,10 +64,13 @@ function decodeSegment(segment: string): Record<string, unknown> | null {
   }
 }
 
-export function verifyLetmeuseToken(token: string, deps: VerifyDeps = {}): LetmeuseClaims | null {
+export async function verifyLetmeuseToken(
+  token: string,
+  deps: VerifyDeps = {},
+): Promise<LetmeuseClaims | null> {
   if (typeof token !== 'string' || !token) return null
 
-  const getKey = deps.getKey ?? getJwksPublicKey
+  const getKey = deps.getKey ?? getJwksPublicKeyAsync
   const appId = deps.appId ?? process.env.LETMEUSE_APP_ID ?? ''
   // Fail closed: letmeuse signs EVERY app's tokens with the SAME ES256 key, so
   // the `app` claim is the only tenancy boundary there is. Without our own app
@@ -83,7 +90,7 @@ export function verifyLetmeuseToken(token: string, deps: VerifyDeps = {}): Letme
   if (!header || header.alg !== 'ES256') return null
   if (typeof header.kid !== 'string' || !header.kid) return null
 
-  const publicKey = getKey(header.kid)
+  const publicKey = await getKey(header.kid)
   if (!publicKey) return null // unknown kid → no trust
 
   let verified = false

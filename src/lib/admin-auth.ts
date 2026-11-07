@@ -51,7 +51,7 @@ const SERVICE_CLAIMS: LetmeuseClaims = {
  *
  * Missing/invalid credential -> 401; valid but not admin -> 403.
  */
-export function gateAdmin(request: Request): AdminGate {
+export async function gateAdmin(request: Request): Promise<AdminGate> {
   const token = bearer(request)
   if (!token) return { ok: false, status: 401 }
 
@@ -60,7 +60,7 @@ export function gateAdmin(request: Request): AdminGate {
     return { ok: true, claims: SERVICE_CLAIMS }
   }
 
-  const claims = verifyLetmeuseToken(token)
+  const claims = await verifyLetmeuseToken(token)
   if (!claims) return { ok: false, status: 401 }
   const adminEmail = process.env.AREYOUBOT_ADMIN_EMAIL
   if (!adminEmail || claims.email !== adminEmail) return { ok: false, status: 403 }

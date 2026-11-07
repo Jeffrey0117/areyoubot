@@ -5,6 +5,6 @@ import { gateAdmin } from '@/lib/admin-auth'
 // UX gating in the admin page — never leaks the configured admin email, and the
 // real authorisation is still enforced on every /api/admin/sites call.
 export async function GET(request: Request): Promise<NextResponse> {
-  const gate = gateAdmin(request)
+  const gate = await gateAdmin(request)
   return NextResponse.json({ isAdmin: gate.ok })
 }

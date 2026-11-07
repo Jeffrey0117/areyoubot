@@ -146,6 +146,31 @@ export function createJwksCache(options: JwksCacheOptions = {}) {
     return key ?? null
   }
 
+  /**
+   * Async lookup: if we do not have the kid, wait for one fetch instead of
+   * failing. Use this from async request handlers.
+   *
+   * Why this exists on top of the boot warm-up: the sync getKey is
+   * fail-closed, so a cold cache rejects the token in hand and only fetches
+   * in the background — the first admin request after every restart 401s with
+   * a perfectly valid token. The warm-up in instrumentation.ts is supposed to
+   * prevent that, but Next.js may bundle instrumentation separately from the
+   * route handlers, in which case they hold DIFFERENT module instances and the
+   * warm-up never reaches the cache the routes use. Awaiting here is correct
+   * regardless of how the bundler splits things.
+   *
+   * Still bounded: refresh() has its own timeout, so this cannot hang.
+   */
+  async function getKeyAsync(kid: string): Promise<crypto.KeyObject | null> {
+    if (typeof kid !== 'string' || !kid) return null
+    const direct = getKey(kid)
+    if (direct) return direct
+    // getKey may already have kicked off a refresh (or one may be in flight)
+    if (inFlight) await inFlight
+    else await refresh()
+    return getKey(kid)
+  }
+
   function stats(): JwksStats {
     return {
       url,
@@ -172,7 +197,7 @@ export function createJwksCache(options: JwksCacheOptions = {}) {
   }
 
   void lastAttemptAt // kept for stats parity with the other services
-  return { getKey, refresh, whenIdle, stats, start, stop, url }
+  return { getKey, getKeyAsync, refresh, whenIdle, stats, start, stop, url }
 }
 
 // Process-wide instance used by letmeuse-auth. Lazily started so importing the
@@ -190,6 +215,11 @@ export function getSharedJwksCache() {
 /** Synchronous public-key lookup; null when we do not have the key. */
 export function getJwksPublicKey(kid: string): crypto.KeyObject | null {
   return getSharedJwksCache().getKey(kid)
+}
+
+/** Async lookup — waits for one fetch on a cache miss. Prefer this in async handlers. */
+export function getJwksPublicKeyAsync(kid: string): Promise<crypto.KeyObject | null> {
+  return getSharedJwksCache().getKeyAsync(kid)
 }
 
 /** Diagnostics — so a broken JWKS URL is visible instead of silent. */

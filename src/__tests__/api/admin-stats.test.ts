@@ -4,6 +4,7 @@ vi.mock('@/lib/jwks-cache', async () => {
   const h = await import('../helpers/test-jwks')
   return {
     getJwksPublicKey: (kid: string) => (kid === h.TEST_KID ? h.testPublicKey : null),
+    getJwksPublicKeyAsync: async (kid: string) => (kid === h.TEST_KID ? h.testPublicKey : null),
     getJwksStats: () => ({ url: 'test', keys: 1, lastSuccessAt: null, lastError: null }),
   }
 })
