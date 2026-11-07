@@ -10,3 +10,11 @@ public/widget.js
 
 # stale npm lockfile — this project uses pnpm (buildCommand: pnpm install)
 package-lock.json
+
+# CloudPipe deploy artifacts. ⚠️ this repo is PUBLIC and
+# .pm2-ecosystem.json contains env values in plaintext (HMAC secret, service
+# token, selfize token) — one `git add -A` would publish them.
+.pm2-ecosystem.json
+.pm2-bg-ecosystem.json
+.deploy-state.json
+.pkg-hash
