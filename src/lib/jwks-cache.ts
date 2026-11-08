@@ -1,32 +1,27 @@
-// JWKS public-key cache for letmeuse ES256 tokens.
+// JWKS public-key cache — ES256 keys from letmeuse's /api/jwks.
 //
-// Why we cache: verification is synchronous (route handlers call it inline),
-// fetching is not. So we fetch in the background, keep the keys in a Map, and
-// read that Map synchronously. No request ever waits on letmeuse.
-//
-// Why no `jose`: node's crypto takes a JWK directly
-// (`createPublicKey({ format: 'jwk' })`) and verifies ES256 directly, so the
-// whole thing is a few dozen lines. Zero external deps, same as before.
-//
-// Fail closed: if we have no key, verification fails and the request is
-// rejected. We would rather lock the admin out than trust a forged token.
-// But fail-closed must be *visible* — hence onError + stats(), so a
-// misconfigured JWKS URL shows up in the logs instead of looking like
-// "nobody is logging in today".
+// 2026-11-08: the implementation moved into `jwks-verify-kit`; what is left here
+// is wiring. The ecosystem had ten independent copies of this logic and each one
+// had tripped over a different half of the same pitfalls. This copy was already
+// one of the better ones (timeout + Promise.race, authoritative empty response,
+// independent miss cooldown), and the kit adds on top of it:
+//   - a plaintext-http JWKS URL throws instead of being used (that response IS
+//     the trust root — plaintext means any MITM can swap the public key and sign
+//     a token for any user)
+//   - a JWK carrying private key material (`d`) is rejected loudly
+//   - `redirect: "error"` (a JWKS endpoint has no business redirecting)
+//   - a key-count cap (createPublicKey is not cheap: 20k keys block the event
+//     loop for 1.2s, and every refresh redoes it)
+//   - duplicate `kid` → first one wins, instead of silently shadowing
+//   - `stats()` also reports `kids` / `stale` / `lastMissKid`
+//   - **cold start**: an async lookup now waits for an in-flight fetch when the
+//     cache has never been populated, so the first request after a restart
+//     succeeds (kit 0.3.1 — this project's own boot warm-up covers the same
+//     ground, but now it is correct even without it)
+import { createJwksCache as createKitCache, type JwksStats as KitStats } from 'jwks-verify-kit'
+import type crypto from 'node:crypto'
 
-import crypto from 'node:crypto'
-
-const DEFAULT_REFRESH_MS = 60 * 60 * 1000
-const DEFAULT_MISS_COOLDOWN_MS = 60_000
-const DEFAULT_TIMEOUT_MS = 5_000
-const DEFAULT_MAX_STALE_MS = 24 * 60 * 60 * 1000
-
-export interface JwksStats {
-  readonly url: string
-  readonly keys: number
-  readonly lastSuccessAt: number | null
-  readonly lastError: string | null
-}
+export type JwksStats = KitStats
 
 export interface JwksCacheOptions {
   url?: string
@@ -38,166 +33,45 @@ export interface JwksCacheOptions {
   onError?: (err: Error) => void
 }
 
-/** A JWK is usable only if it is an ES256 signing key on P-256. */
-function toPublicKey(jwk: Record<string, unknown>): crypto.KeyObject | null {
-  if (!jwk || typeof jwk !== 'object') return null
-  if (typeof jwk.kid !== 'string' || !jwk.kid) return null
-  if (jwk.kty !== 'EC' || jwk.crv !== 'P-256') return null
-  if (jwk.alg && jwk.alg !== 'ES256') return null
-  if (jwk.use && jwk.use !== 'sig') return null
-  try {
-    return crypto.createPublicKey({ key: jwk as crypto.JsonWebKeyInput['key'], format: 'jwk' })
-  } catch {
-    return null // one bad JWK must not sink the whole set
-  }
-}
-
 /**
- * Deadline for a fetch. This is not belt-and-braces: node's fetch has NO
- * default timeout, so a peer that accepts the connection and then never
- * answers leaves the promise pending forever — the in-flight guard stays set,
- * the cache never refreshes again, and every request 401s until the process is
- * restarted, with nothing in the logs. The timer is deliberately NOT unref'd:
- * an unref'd timer does not fire when nothing else keeps the event loop alive.
+ * Resolve the JWKS URL.
+ *
+ * Deliberately not hardcoding a host: this repo is public, so a self-hosted
+ * service address does not belong in the source. Order: explicit →
+ * LETMEUSE_JWKS_URL → LETMEUSE_BASE_URL + /api/jwks.
  */
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  if (!(ms > 0)) return promise
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`JWKS fetch timed out after ${ms}ms`)), ms)
-    promise.then(
-      (v) => { clearTimeout(timer); resolve(v) },
-      (e) => { clearTimeout(timer); reject(e) },
-    )
-  })
+function resolveUrl(explicit?: string): string {
+  if (explicit) return explicit
+  if (process.env.LETMEUSE_JWKS_URL) return process.env.LETMEUSE_JWKS_URL
+  const base = (process.env.LETMEUSE_BASE_URL || '').replace(/\/+$/, '')
+  return base ? `${base}/api/jwks` : ''
 }
 
 export function createJwksCache(options: JwksCacheOptions = {}) {
-  const url = options.url ?? process.env.LETMEUSE_JWKS_URL ?? 'http://localhost:4006/api/jwks'
-  const fetchImpl = options.fetchImpl ?? ((...args: Parameters<typeof fetch>) => fetch(...args))
-  const refreshMs = options.refreshMs ?? DEFAULT_REFRESH_MS
-  const missCooldownMs = options.missCooldownMs ?? DEFAULT_MISS_COOLDOWN_MS
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
-  const maxStaleMs = options.maxStaleMs ?? DEFAULT_MAX_STALE_MS
-  const onError = options.onError ?? ((e: Error) => console.warn(`[jwks] fetch failed: ${e.message}`))
-
-  let keysByKid = new Map<string, crypto.KeyObject>()
-  let lastSuccessAt = 0
-  let lastAttemptAt = 0
-  let lastMissFetchAt = 0
-  let lastError: Error | null = null
-  let inFlight: Promise<void> | null = null
-  let timer: ReturnType<typeof setInterval> | null = null
-
-  async function doRefresh(): Promise<void> {
-    try {
-      const signal = timeoutMs > 0 && typeof AbortSignal?.timeout === 'function'
-        ? AbortSignal.timeout(timeoutMs)
-        : undefined
-      const res = await withTimeout(fetchImpl(url, signal ? { signal } : undefined), timeoutMs)
-      if (!res || !res.ok) throw new Error(`JWKS HTTP ${res ? res.status : 'no response'}`)
-      const data = (await withTimeout(Promise.resolve(res.json()), timeoutMs)) as {
-        keys?: Array<Record<string, unknown>>
-      }
-      if (!Array.isArray(data?.keys)) throw new Error('JWKS response malformed (keys is not an array)')
-      const next = new Map<string, crypto.KeyObject>()
-      for (const jwk of data.keys) {
-        const key = toPublicKey(jwk)
-        if (key) next.set(jwk.kid as string, key)
-      }
-      // A well-formed 200 is authoritative, EVEN IF EMPTY — replace wholesale.
-      // Keeping the old keys on an empty response would make emergency
-      // revocation useless: letmeuse pulls a leaked key, and we would keep
-      // accepting tokens signed with it for weeks. Only transport failures
-      // (the throws above) preserve the cache.
-      keysByKid = next
-      lastSuccessAt = Date.now()
-      lastError = null
-      if (next.size === 0) {
-        lastError = new Error('JWKS has no usable ES256 key — cache cleared, all tokens will be rejected')
-        try { onError(lastError) } catch { /* a broken reporter must not break this */ }
-      }
-    } catch (e) {
-      lastError = e as Error
-      try { onError(lastError) } catch { /* as above */ }
-    }
+  const url = resolveUrl(options.url)
+  if (!url) {
+    // Fail loudly at construction instead of silently rejecting every token.
+    // areyoubot already lived through the other version of this: it ran for
+    // three months with half its config missing — home page and health check
+    // green the whole time, while nobody could log in and the stats read 0,
+    // which looks exactly like "no users yet". See infra-map.
+    throw new Error(
+      'areyoubot: no JWKS URL configured (need LETMEUSE_JWKS_URL or '
+      + 'LETMEUSE_BASE_URL). A verifier with no URL rejects every token while '
+      + 'the service still answers 200 — that failure is the hardest to find, '
+      + 'so we refuse to start instead.',
+    )
   }
-
-  function refresh(): Promise<void> {
-    if (inFlight) return inFlight
-    inFlight = doRefresh().finally(() => {
-      inFlight = null
-      lastAttemptAt = Date.now() // cooldown counts from completion, not start
-    })
-    return inFlight
-  }
-
-  function getKey(kid: string): crypto.KeyObject | null {
-    if (typeof kid !== 'string' || !kid) return null
-    const stale = maxStaleMs > 0 && lastSuccessAt > 0 && Date.now() - lastSuccessAt > maxStaleMs
-    const key = stale ? undefined : keysByKid.get(kid)
-    // Unknown kid (key may have just rotated) → refetch in the background, but
-    // still return null for THIS call. Verification is synchronous and
-    // fail-closed beats waiting on the network. Its own cooldown timer, so a
-    // scheduled refresh does not wipe it.
-    if (!key && !inFlight && Date.now() - lastMissFetchAt >= missCooldownMs) {
-      lastMissFetchAt = Date.now()
-      void refresh().finally(() => { lastMissFetchAt = Date.now() })
-    }
-    return key ?? null
-  }
-
-  /**
-   * Async lookup: if we do not have the kid, wait for one fetch instead of
-   * failing. Use this from async request handlers.
-   *
-   * Why this exists on top of the boot warm-up: the sync getKey is
-   * fail-closed, so a cold cache rejects the token in hand and only fetches
-   * in the background — the first admin request after every restart 401s with
-   * a perfectly valid token. The warm-up in instrumentation.ts is supposed to
-   * prevent that, but Next.js may bundle instrumentation separately from the
-   * route handlers, in which case they hold DIFFERENT module instances and the
-   * warm-up never reaches the cache the routes use. Awaiting here is correct
-   * regardless of how the bundler splits things.
-   *
-   * Still bounded: refresh() has its own timeout, so this cannot hang.
-   */
-  async function getKeyAsync(kid: string): Promise<crypto.KeyObject | null> {
-    if (typeof kid !== 'string' || !kid) return null
-    const direct = getKey(kid)
-    if (direct) return direct
-    // getKey may already have kicked off a refresh (or one may be in flight)
-    if (inFlight) await inFlight
-    else await refresh()
-    return getKey(kid)
-  }
-
-  function stats(): JwksStats {
-    return {
-      url,
-      keys: keysByKid.size,
-      lastSuccessAt: lastSuccessAt || null,
-      lastError: lastError ? lastError.message : null,
-    }
-  }
-
-  async function whenIdle(): Promise<void> {
-    for (let i = 0; i < 10 && inFlight; i += 1) await inFlight
-  }
-
-  function start(): void {
-    void refresh()
-    if (refreshMs > 0 && !timer) {
-      timer = setInterval(() => void refresh(), refreshMs)
-      ;(timer as { unref?: () => void }).unref?.()
-    }
-  }
-
-  function stop(): void {
-    if (timer) { clearInterval(timer); timer = null }
-  }
-
-  void lastAttemptAt // kept for stats parity with the other services
-  return { getKey, getKeyAsync, refresh, whenIdle, stats, start, stop, url }
+  return createKitCache({
+    url,
+    algorithms: ['ES256'],
+    fetchImpl: options.fetchImpl,
+    refreshMs: options.refreshMs,
+    missCooldownMs: options.missCooldownMs,
+    timeoutMs: options.timeoutMs,
+    maxStaleMs: options.maxStaleMs,
+    onError: options.onError,
+  })
 }
 
 // Process-wide instance used by letmeuse-auth. Lazily started so importing the
@@ -207,7 +81,7 @@ let shared: ReturnType<typeof createJwksCache> | null = null
 export function getSharedJwksCache() {
   if (!shared) {
     shared = createJwksCache()
-    shared.start()
+    void shared.start()
   }
   return shared
 }

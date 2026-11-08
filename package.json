@@ -11,6 +11,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "jwks-verify-kit": "github:Jeffrey0117/jwks-verify-kit",
     "next": "16.1.6",
     "react": "19.0.0",
     "react-dom": "19.0.0"

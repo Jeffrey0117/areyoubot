@@ -9,14 +9,15 @@ export async function register(): Promise<void> {
 
   // Warm the JWKS public-key cache at boot.
   //
-  // Verification is synchronous and fail-closed, so a cold cache rejects the
-  // token it is handed and only fetches the key in the background. Without
-  // this warm-up the FIRST admin request after every restart 401s even with a
-  // perfectly valid token — which reads exactly like "my login is broken".
-  // Awaiting one fetch here costs a few hundred ms of boot and removes the
-  // whole class of problem. Best-effort: if letmeuse is down we still boot,
-  // the cache retries on the next unknown-kid miss, and the reason is visible
-  // in getJwksStats().lastError.
+  // Verification is fail-closed, so a cold cache rejects the token it is handed.
+  // The async lookup now also waits for an in-flight fetch while the cache has
+  // never been populated (jwks-verify-kit 0.3.1), so a cold start no longer
+  // 401s the first request even without this warm-up — but warming here still
+  // removes a few hundred ms from that first request, and it is the one place
+  // that can SAY something when the key fetch is broken.
+  // Best-effort: if letmeuse is down we still boot, the cache retries on the
+  // next miss, and the reason is visible in getJwksStats().lastError and in
+  // GET /api/health.
   try {
     const { getSharedJwksCache } = await import('@/lib/jwks-cache')
     const cache = getSharedJwksCache()

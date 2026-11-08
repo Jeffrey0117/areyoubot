@@ -7,7 +7,7 @@
 - esbuild → `public/widget.js`（零依賴 IIFE，純 JS SHA-256）
 - Selfize（`selfize.isnowfriend.com`）存 site/stats；Redis 無、replay 用記憶體
 - LetMeUse 後台登入（app `app_KeD453DW`）
-- Vitest（133 tests）
+- Vitest（151 tests）
 - Port: **4033** ｜ Live: `https://areyoubot.isnowfriend.com`
 
 ## Run
@@ -34,7 +34,8 @@ src/lib/
   sites-instance.ts — 有 SELFIZE_URL 用 selfize，否則記憶體；seedDemoSite()
   selfize.ts        — selfize REST client（idempotent ensure，吞 already-exists 500）
   replay.ts         — ReplayStore 介面 + 記憶體（⚠️ 生產要換 Redis）
-  letmeuse-auth.ts  — verifyLetmeuseToken：驗 HS256 簽章（LETMEUSE_APP_SECRET）+ exp，fail-closed
+  letmeuse-auth.ts  — verifyLetmeuseToken：驗 **ES256** 簽章（JWKS 公鑰，實作在 jwks-verify-kit）+ exp，fail-closed
+  jwks-cache.ts     — JWKS 公鑰快取接線（實作在 jwks-verify-kit）
   admin-auth.ts     — gateAdmin：letmeuse JWT + email===AREYOUBOT_ADMIN_EMAIL
   stats.ts          — hot-path 記憶體計數（同步、永不 throw）
   stats-flush.ts    — 30s flush 到 selfize areyoubot_stats（daily bucket upsert）
@@ -55,12 +56,15 @@ src/instrumentation.ts — boot：seedDemoSite + ensureStatsCollection + 30s flu
 
 ## API（見 README 表）
 公開：`GET /api/challenge?sitekey=`、`POST /api/verify {token,secret}`。
-管理（letmeuse JWT，HS256 驗簽 + admin email）：`POST/GET /api/admin/sites`、`GET /api/admin/stats`。
+管理（letmeuse JWT，**ES256** 驗簽 + admin email）：`POST/GET /api/admin/sites`、`GET /api/admin/stats`。
+健檢：`GET /api/health` → `{ok, service, jwks:{ok,keys,degraded}}`（一律 200，但依賴狀態看得見）。
 
 ## Env（.env.production，部署已設）
 - `AREYOUBOT_HMAC_SECRET` — 簽 challenge（必）
 - `SELFIZE_URL` / `SELFIZE_TOKEN` — site/stats 儲存（沒設則 fallback 記憶體 demo）
-- `LETMEUSE_APP_ID` (`app_KeD453DW`) / `LETMEUSE_APP_SECRET` — 後台驗 JWT 簽章
+- `LETMEUSE_APP_ID` (`app_KeD453DW`) — 後台驗 JWT 的租戶邊界（**唯一**的邊界：letmeuse 用同一把 ES256 金鑰簽發所有 app 的 token）
+- `LETMEUSE_JWKS_URL` 或 `LETMEUSE_BASE_URL` — 拿公鑰的位址（缺了啟動就失敗，不會靜默變成全部 401）
+- ⚠️ **不需要 `LETMEUSE_APP_SECRET`**：改 ES256 之後驗證只要公鑰，留著只是多一個外洩點
 - `AREYOUBOT_ADMIN_EMAIL` — 唯一能進後台的 email
 
 ## 別人的專案要整合 → 用 `/integrate-areyoubot`
@@ -78,8 +82,12 @@ src/instrumentation.ts — boot：seedDemoSite + ensureStatsCollection + 30s flu
 | 改 `src/widget/sha256.ts` 沒同步 worker-source | 兩份是手動複本，`worker-source.test.ts` 會抓不一致 |
 
 ## Gotchas
-- **部署在 `cloudpipe/projects/areyoubot`（clone），dev 在這裡（workhub）**。改 code → push → CloudPipe 部署。`public/widget.js` 是 build 產物、已 gitignore（別 commit，否則 build 後 dirty 擋部署）。
+- **⛔ 這個目錄（`cloudpipe/projects/areyoubot`）就是部署目錄本身，沒有 workhub 分身**（2026-11-08 確認；registry 的 directory 指這裡）。
+  後果是 **webhook 部署會變成無聲 no-op**：deploy 的流程是 `git fetch` + `git merge --ff-only origin/{branch}`，而在部署目錄裡 commit + push 之後遠端與本地同一個 commit → merge「已是最新」→ 跳過建置與重啟，部署紀錄可能根本不產生。
+  症狀指紋＝「push 了、webhook 回 200、目錄 HEAD 也是新 commit，但服務還跑舊碼」（2026-11-07 實案：程序從 2026-08-15 起 2000 多小時沒重啟過）。
+  **所以改完要手動觸發：`POST /api/_admin/deploy/projects/areyoubot/deploy` 帶 `{"force":true}`**，並用「程序建立時間」驗收（行為指紋 > 部署紀錄 > registry）。那個 POST 常回 504 但其實已經開始跑，別重複觸發。
+- `public/widget.js` 是 build 產物、已 gitignore（別 commit，否則 build 後 dirty 擋部署）。
 - selfize「collection 已存在」回 **500 + already exists**（不是 409）；`selfize.ts` 已吞這個。
-- letmeuse JWT **要驗 HS256 簽章**（admin endpoint 公開，只 decode 不驗 = 任何人偽造 admin email 就進得來）。`LETMEUSE_APP_SECRET` 沒設則 fail-closed。
+- letmeuse JWT **只收 ES256**（admin endpoint 公開，只 decode 不驗 = 任何人偽造 admin email 就進得來）。2026-11-07 從 HS256 改過來：HS256 用 app secret 當簽章金鑰，等於驗證方必須握著簽發金鑰，secret 一外洩就能自簽 admin（pokkit 2026-10-25 事件）。`LETMEUSE_APP_ID` 沒設則 fail-closed。驗章實作在 `jwks-verify-kit`（2026-11-08 起），別再在這裡手寫。
 - replay/stats 是記憶體 per-process；多實例下 stats 各自 flush（PATCH 累加，30s tick 可能 race，簡單統計可接受），replay 多實例要換 Redis。
 - MCP 工具（`areyoubot_create_site/list_sites/get_stats`）定義在 `cloudpipe/data/manifests/areyoubot.json`，token 走 `auth.json` envDir → `projects/areyoubot/.env` 的 1 年 admin JWT。

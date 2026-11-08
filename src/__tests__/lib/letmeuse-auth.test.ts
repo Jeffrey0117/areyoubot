@@ -172,4 +172,43 @@ describe('verifyLetmeuseToken (ES256, JWKS public key)', () => {
     expect(out).not.toBeNull()
     expect(out?.name).toBeUndefined()
   })
+
+  // ── added 2026-11-08 with the move to jwks-verify-kit ────────────────────
+  // Two properties the hand-written version did NOT have. Both were verified to
+  // go red against it (see the commit message).
+
+  it('🔒 rejects a non-canonical signature spelling (one signature, 16 encodings)', async () => {
+    // 86 base64url characters carry 516 bits while an ES256 signature is 512, so
+    // the last character has 4 free bits → 16 strings decode to the same bytes
+    // and the old length/charset check accepted all of them. Harmless until
+    // something keys on the token string (revocation list, replay/idempotency
+    // cache, rate-limit bucket, log dedup) — then one valid token walks around it.
+    const token = valid()
+    const [h, p, sig] = token.split('.')
+    const bytes = Buffer.from(sig, 'base64url')
+    const ALPHA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+    let alt: string | null = null
+    for (const c of ALPHA) {
+      if (c === sig[sig.length - 1]) continue
+      const cand = sig.slice(0, -1) + c
+      if (Buffer.from(cand, 'base64url').equals(bytes)) { alt = cand; break }
+    }
+    expect(alt).not.toBeNull()
+    expect(await verifyLetmeuseToken(`${h}.${p}.${sig}`, deps)).not.toBeNull() // canonical passes
+    expect(await verifyLetmeuseToken(`${h}.${p}.${alt}`, deps)).toBeNull()     // synonym does not
+  })
+
+  it('🔒 rejects a payload carrying an own __proto__ key', async () => {
+    // A host that ever does `Object.assign(session, claims)` gets its prototype
+    // polluted — Object.assign goes through Set, which fires the __proto__
+    // setter on the *target*'s prototype, so a null-prototype claims object
+    // does not save you. The key itself has to be refused.
+    const raw = (x: string) => Buffer.from(x).toString('base64url')
+    const header = raw(JSON.stringify({ alg: 'ES256', typ: 'JWT', kid: KID }))
+    const payload = raw(`{"sub":"u1","email":"admin@x.com","app":"${APP}","exp":${future},"__proto__":{"isAdmin":true}}`)
+    const sig = crypto.sign('sha256', Buffer.from(`${header}.${payload}`), {
+      key: privateKey, dsaEncoding: 'ieee-p1363' as const,
+    })
+    expect(await verifyLetmeuseToken(`${header}.${payload}.${sig.toString('base64url')}`, deps)).toBeNull()
+  })
 })

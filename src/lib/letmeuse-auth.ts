@@ -23,7 +23,8 @@
 //
 // Zero external deps — node's built-in crypto only.
 
-import crypto from 'node:crypto'
+import type crypto from 'node:crypto'
+import { verifyJwtAsync, type Claims } from 'jwks-verify-kit'
 import { getJwksPublicKeyAsync } from './jwks-cache'
 
 export interface LetmeuseClaims {
@@ -44,91 +45,81 @@ export interface VerifyDeps {
   readonly appId?: string
 }
 
-// Strict base64url. `Buffer.from(x, 'base64url')` silently ignores characters
-// outside the alphabet, so without this one token has many equivalent
-// spellings — which would defeat anything that ever keys on the token string
-// (replay cache, revocation list, rate-limit bucket, log correlation).
-// An ES256 signature is 64 bytes (r||s) => exactly 86 unpadded base64url
-// characters; that length check also rejects DER-encoded signatures.
-const B64URL = /^[A-Za-z0-9_-]+$/
-const B64URL_ES256_SIG = /^[A-Za-z0-9_-]{86}$/
-
-function decodeSegment(segment: string): Record<string, unknown> | null {
-  try {
-    const json = Buffer.from(segment, 'base64url').toString('utf8')
-    const parsed = JSON.parse(json)
-    if (parsed && typeof parsed === 'object') return parsed as Record<string, unknown>
-    return null
-  } catch {
-    return null
-  }
-}
-
+/**
+ * Verify a letmeuse access token. Returns the claims, or null — never throws.
+ *
+ * 2026-11-08: the verification itself now lives in `jwks-verify-kit`. This copy
+ * was already close to correct; what the kit adds is the stuff that is easy to
+ * miss and expensive when missed:
+ *   - **signature canonicalisation.** 86 base64url characters carry 516 bits
+ *     while an ES256 signature is 512, so one signature has 16 equivalent
+ *     spellings (the other 15 all verify). The length/charset check here did
+ *     not catch that. Harmless today, but the moment anything keys on the token
+ *     string — a revocation list, a replay/idempotency cache, a rate-limit
+ *     bucket, log dedup — anyone holding one valid token can walk around it.
+ *   - **claims no longer resolve through the prototype chain.** Any prototype
+ *     pollution anywhere in the process, plus one validly-signed token with no
+ *     `exp` and no `app`, would have meant: never expires, any tenant passes.
+ *   - a payload carrying an own `__proto__` key is rejected outright (a host
+ *     that ever does `Object.assign(session, claims)` is the victim).
+ *   - a `crit` header is rejected (RFC 7515 §4.1.11: understand it or reject).
+ *   - the key's curve must match the declared alg.
+ *   - **requiredClaims is type-checked.** Passing a string (forgot the
+ *     JSON.parse) would make the whole tenancy check vanish silently — and the
+ *     test suite would stay green.
+ *   - `onReject` gives a stable reason per rejected token, so a 401 is no longer
+ *     a black box.
+ *
+ * 🔒 ES256 only (since 2026-11-07). HS256 signs with the app *secret*, which
+ * means the verifier has to hold the signing key — and once that secret leaks,
+ * anyone can mint a token with any `sub`/`email`/`role` they like and walk
+ * straight into the admin API. That is exactly how pokkit was compromised on
+ * 2026-10-25. With ES256 we verify against the JWKS *public* key: areyoubot
+ * never holds a signing key, so even a leaked app secret cannot forge a token.
+ *
+ * `appId` is mandatory and fails closed: letmeuse signs EVERY app's tokens with
+ * the SAME ES256 key, so the `app` claim is the only tenancy boundary there is.
+ */
 export async function verifyLetmeuseToken(
   token: string,
   deps: VerifyDeps = {},
 ): Promise<LetmeuseClaims | null> {
-  if (typeof token !== 'string' || !token) return null
-
   const getKey = deps.getKey ?? getJwksPublicKeyAsync
   const appId = deps.appId ?? process.env.LETMEUSE_APP_ID ?? ''
-  // Fail closed: letmeuse signs EVERY app's tokens with the SAME ES256 key, so
-  // the `app` claim is the only tenancy boundary there is. Without our own app
-  // id we cannot check it — and would be accepting any letmeuse user from any
-  // app in the ecosystem.
-  if (!appId) return null
-
-  const parts = token.split('.')
-  if (parts.length !== 3) return null
-  const [headerSeg, payloadSeg, providedSig] = parts
-  if (!B64URL.test(headerSeg) || !B64URL.test(payloadSeg)) return null
-  if (!B64URL_ES256_SIG.test(providedSig)) return null
-
-  // Lock the algorithm to ES256 — rejects alg:none, HS256 (a leaked app secret
-  // must not be forgeable into a token) and any algorithm confusion.
-  const header = decodeSegment(headerSeg)
-  if (!header || header.alg !== 'ES256') return null
-  if (typeof header.kid !== 'string' || !header.kid) return null
-
-  const publicKey = await getKey(header.kid)
-  if (!publicKey) return null // unknown kid → no trust
-
-  let verified = false
-  try {
-    verified = crypto.verify(
-      'sha256',
-      Buffer.from(`${headerSeg}.${payloadSeg}`),
-      { key: publicKey, dsaEncoding: 'ieee-p1363' },
-      Buffer.from(providedSig, 'base64url'),
-    )
-  } catch {
+  // Fail closed, and say so. Without our own app id we cannot check the `app`
+  // claim — and would be accepting any letmeuse user from any app in the
+  // ecosystem. The kit's requiredClaims would reject everything anyway, but
+  // silently; "all 401s with no reason" is its own kind of outage.
+  if (!appId) {
+    console.error('[auth] 401: LETMEUSE_APP_ID is not set — rejecting everything (the JWKS key is shared by every app)')
     return null
   }
-  if (!verified) return null
 
-  // Signature verified — now decode and validate claims.
-  const payload = decodeSegment(payloadSeg)
-  if (!payload) return null
+  const claims: Claims | null = await verifyJwtAsync(token, {
+    getKey,
+    algorithms: ['ES256'],
+    requiredClaims: { app: appId },
+    // Server-side log only. The values in `info` mostly come from the caller
+    // (alg / kid / claim values) — echoing them back would be a reflected
+    // information leak.
+    onReject: (info) => console.warn(`[auth] 401: ${info.reason}`),
+  })
+  if (!claims) return null
 
-  const now = Math.floor(Date.now() / 1000)
-  // exp must be a number: a token with no exp (or a string exp) would never
-  // expire, and the 4h lifetime is the only revocation this design has.
-  const exp = payload.exp
-  if (typeof exp !== 'number') return null
-  if (exp <= now) return null
-  if (typeof payload.nbf === 'number' && payload.nbf > now) return null
-  // A token minted for another app must not open this one.
-  if (payload.app !== appId) return null
-
-  const email = payload.email
-  const sub = payload.sub
-  if (typeof email !== 'string' || !email) return null
+  // The kit guarantees a non-empty string `sub`. areyoubot additionally gates
+  // the admin API on `email`, so that one must be a non-empty string too.
+  const email = claims.email
+  const sub = claims.sub
+  if (typeof email !== 'string' || !email) {
+    console.warn('[auth] 401: token has no string email')
+    return null
+  }
   if (typeof sub !== 'string' || !sub) return null
 
   return {
     sub,
     email,
-    ...(typeof payload.name === 'string' ? { name: payload.name } : {}),
-    ...(typeof payload.role === 'string' ? { role: payload.role } : {}),
+    ...(typeof claims.name === 'string' ? { name: claims.name } : {}),
+    ...(typeof claims.role === 'string' ? { role: claims.role } : {}),
   }
 }
