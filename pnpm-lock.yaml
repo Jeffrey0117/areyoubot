@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       jwks-verify-kit:
-        specifier: github:Jeffrey0117/jwks-verify-kit
-        version: https://codeload.github.com/Jeffrey0117/jwks-verify-kit/tar.gz/84476987e4eeb30d507675b860c1075a7948a73e
+        specifier: github:Jeffrey0117/jwks-verify-kit#v0.4.5
+        version: https://codeload.github.com/Jeffrey0117/jwks-verify-kit/tar.gz/5eb38a73824167f15bb350698996b7c046fa4451
       next:
         specifier: 16.1.6
         version: 16.1.6(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
@@ -792,9 +792,9 @@ packages:
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
 
-  jwks-verify-kit@https://codeload.github.com/Jeffrey0117/jwks-verify-kit/tar.gz/84476987e4eeb30d507675b860c1075a7948a73e:
-    resolution: {gitHosted: true, integrity: sha512-Yop8zhQunTT4F2+BIVfvVIIQtCkMkCFqCYWZN72zTlIMFG4CYzCUZ1F+wwIPaz9UG90QY0O7jsNJM25bQBxf+Q==, tarball: https://codeload.github.com/Jeffrey0117/jwks-verify-kit/tar.gz/84476987e4eeb30d507675b860c1075a7948a73e}
-    version: 0.4.0
+  jwks-verify-kit@https://codeload.github.com/Jeffrey0117/jwks-verify-kit/tar.gz/5eb38a73824167f15bb350698996b7c046fa4451:
+    resolution: {gitHosted: true, integrity: sha512-M03JIO4VO03EPlAhRawxdJx8v9smRyfqZWEO1hMV/o8J+xhjSRt8naa3nwCBKpNvV2Gv6wpujs75woXPMswd1g==, tarball: https://codeload.github.com/Jeffrey0117/jwks-verify-kit/tar.gz/5eb38a73824167f15bb350698996b7c046fa4451}
+    version: 0.4.5
     engines: {node: '>=18'}
 
   loupe@3.2.1:
@@ -1498,7 +1498,7 @@ snapshots:
   fsevents@2.3.3:
     optional: true
 
-  jwks-verify-kit@https://codeload.github.com/Jeffrey0117/jwks-verify-kit/tar.gz/84476987e4eeb30d507675b860c1075a7948a73e: {}
+  jwks-verify-kit@https://codeload.github.com/Jeffrey0117/jwks-verify-kit/tar.gz/5eb38a73824167f15bb350698996b7c046fa4451: {}
 
   loupe@3.2.1: {}
 
