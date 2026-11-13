@@ -1,0 +1,58 @@
+{
+  "repo": 1,
+  "name": "areyoubot",
+  "what": "自架 **Proof-of-Work CAPTCHA** 服務（reCAPTCHA/Turnstile 的自架替代）。隱形、零外部依賴、不用申請。",
+  "kind": "service",
+  "work": {
+    "guide": "CLAUDE.md",
+    "run": "npm run dev",
+    "test": "npm test",
+    "build": "npm run build",
+    "deploy": "git push"
+  },
+  "offers": [
+    {
+      "id": "create_site",
+      "what": "Create a new areyoubot CAPTCHA site. Returns { sitekey, secret, difficulty } — the secret is shown ONCE.\n\nEmbed on any page with a <form>:\n  <script src=\"https://<this service public address>/widget.js\" data-ayb-sitekey=\"SITEKEY\"></script>\nThe widget silently solves a Proof-of-Work challenge (invisible, no images), injects a hidden <input name=\"areyoubot-token\">, and shows an \"are you bot? 😏\" badge (data-ayb-badge=\"off\" to hide).\n\nHost backend verifies server-side:\n  POST https://<this service public address>/api/verify { token: <the areyoubot-token>, secret: <SECRET> } -> { success: true|false }\n\ndifficulty = leading zero bits of SHA-256 (default 18, range 1-24; higher = more bot CPU cost, slower for users).",
+      "how": "http",
+      "http": {
+        "method": "POST",
+        "path": "/api/admin/sites",
+        "auth": "bearer",
+        "params": {
+          "type": "object",
+          "properties": {
+            "label": {
+              "type": "string",
+              "description": "Human-friendly label for the site"
+            },
+            "difficulty": {
+              "type": "number",
+              "description": "PoW difficulty (leading zero bits, 1-24, default 18)"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "list_sites",
+      "what": "List all areyoubot sites (sitekey, difficulty, disabled, label, created_at). Secrets are NEVER returned.",
+      "how": "http",
+      "http": {
+        "method": "GET",
+        "path": "/api/admin/sites",
+        "auth": "bearer"
+      }
+    },
+    {
+      "id": "get_stats",
+      "what": "Get verification stats per site (challenges issued, verify success/fail) plus a 7-day daily breakdown.",
+      "how": "http",
+      "http": {
+        "method": "GET",
+        "path": "/api/admin/stats",
+        "auth": "bearer"
+      }
+    }
+  ]
+}
